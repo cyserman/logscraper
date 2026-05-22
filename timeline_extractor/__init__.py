@@ -5,27 +5,8 @@ import os
 from typing import Iterator
 
 from .extraction import extract_with_llm, aggregate_summary
-
-
-def chunk_text(text: str, max_tokens: int = 150000) -> Iterator[str]:
-    """Split text into chunks that fit within token limits."""
-    lines = text.split('\n')
-    current_chunk = []
-    current_size = 0
-
-    for line in lines:
-        line_size = len(line) // 4
-        if current_size + line_size > max_tokens:
-            if current_chunk:
-                yield '\n'.join(current_chunk)
-            current_chunk = [line]
-            current_size = line_size
-        else:
-            current_chunk.append(line)
-            current_size += line_size
-
-    if current_chunk:
-        yield '\n'.join(current_chunk)
+from .document_parser import parse_document
+from .analysis import analyze_documents, test_hypothesis_with_document, request_additional_info
 
 
 def extract_timeline(raw_text: str, api_key: str = None) -> dict:
@@ -54,6 +35,27 @@ def extract_timeline(raw_text: str, api_key: str = None) -> dict:
         'contradictions': all_contradictions,
         'summary': summary
     }
+
+
+def chunk_text(text: str, max_tokens: int = 150000) -> Iterator[str]:
+    """Split text into chunks that fit within token limits."""
+    lines = text.split('\n')
+    current_chunk = []
+    current_size = 0
+
+    for line in lines:
+        line_size = len(line) // 4
+        if current_size + line_size > max_tokens:
+            if current_chunk:
+                yield '\n'.join(current_chunk)
+            current_chunk = [line]
+            current_size = line_size
+        else:
+            current_chunk.append(line)
+            current_size += line_size
+
+    if current_chunk:
+        yield '\n'.join(current_chunk)
 
 
 def events_to_csv(events: list[dict], output_path: str) -> None:
@@ -102,30 +104,75 @@ def write_summary_tables(summary: dict, output_dir: str) -> None:
                     writer.writerow(row)
 
 
+def analyze_case(documents: dict[str, str], api_key: str = None) -> dict:
+    """
+    Cross-reference multiple documents to find contradictions and test assumptions.
+
+    Args:
+        documents: dict of {filename: text_content}
+        api_key: LLM API key
+
+    Returns:
+        dict with 'contradictions', 'hypotheses', 'verification_needed', 'questions_for_user', 'raw_analysis'
+    """
+    return analyze_documents(documents, api_key)
+
+
+def add_document_to_case(case_state: dict, filename: str, api_key: str = None) -> dict:
+    """
+    Add a new document to an existing case analysis and re-analyze.
+
+    Args:
+        case_state: previous analysis result
+        filename: path to new document
+        api_key: LLM API key
+
+    Returns:
+        updated case analysis with new findings
+    """
+    new_content = parse_document(filename)
+    new_documents = case_state.get('documents', {})
+    new_documents[filename] = new_content
+
+    return analyze_documents(new_documents, api_key)
+
+
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: python -m timeline_extractor <input_file> [output_dir]")
-        print("  input_file: Path to raw SMS text file")
-        print("  output_dir: Output directory (default: ./output)")
-        sys.exit(1)
+    import argparse
 
-    input_file = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else './output'
+    parser = argparse.ArgumentParser(description='Timeline Extraction & Case Analysis')
+    subparsers = parser.add_subparsers(dest='command', help='Command to run')
 
-    api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
+    extract_parser = subparsers.add_parser('extract', help='Extract timeline from SMS text')
+    extract_parser.add_argument('input_file', help='Input SMS text file')
+    extract_parser.add_argument('-o', '--output', default='./output', help='Output directory')
 
-    with open(input_file, 'r') as f:
-        raw_text = f.read()
+    analyze_parser = subparsers.add_parser('analyze', help='Analyze documents for contradictions')
+    analyze_parser.add_argument('files', nargs='+', help='Input document files')
+    analyze_parser.add_argument('-o', '--output', default='./analysis', help='Output file')
 
-    print(f"Loaded {len(raw_text)} characters from {input_file}")
-    print("Calling LLM for extraction...")
-    result = extract_timeline(raw_text, api_key)
+    args = parser.parse_args()
 
-    events_to_csv(result.get('events', []), f'{output_dir}/events.csv')
-    write_summary_tables(result.get('summary', {}), output_dir)
+    if args.command == 'extract':
+        api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
+        with open(args.input_file, 'r') as f:
+            raw_text = f.read()
+        result = extract_timeline(raw_text, api_key)
+        events_to_csv(result['events'], f'{args.output}/events.csv')
+        write_summary_tables(result['summary'], args.output)
+        print(f"Extracted {len(result['events'])} events")
 
-    print(f"\nOutput written to {output_dir}/")
-    print(f"  - events.csv ({len(result.get('events', []))} events)")
-    for key in result.get('summary', {}):
-        count = len(result['summary'][key])
-        print(f"  - {key}.csv ({count} entries)")
+    elif args.command == 'analyze':
+        api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
+        documents = {}
+        for f in args.files:
+            documents[f] = parse_document(f)
+        result = analyze_documents(documents, api_key)
+
+        os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
+        with open(args.output, 'w') as f:
+            f.write(result['raw_analysis'])
+        print(f"Analysis written to {args.output}")
+
+    else:
+        parser.print_help()
