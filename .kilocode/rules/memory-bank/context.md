@@ -8,12 +8,11 @@
 
 ## Recently Completed
 
-- [x] Timeline extraction module architecture
-- [x] Two-pass extraction: raw events + aggregated summaries
-- [x] LLM integration (Gemini/OpenAI) with chunking for large SMS exports
-- [x] Outputs: events.csv + 10 summary category CSVs
-- [x] Contradiction detection for legal ammunition
-- [x] Standalone module design for CaseCraft portability
+- [x] Multi-document analysis with cross-referencing
+- [x] document_parser.py: PDF, images (OCR via Vision), docx, xlsx, csv, md, txt
+- [x] analysis.py: contradiction finding, testable hypothesis generation
+- [x] Interactive refinement: asks for additional docs to fill gaps
+- [x] Case state persists and grows as new documents are added
 
 ## Project Architecture
 
