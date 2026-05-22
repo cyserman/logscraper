@@ -8,7 +8,16 @@
 
 ## Recently Completed
 
+- [x] Timeline extraction module architecture
+- [x] Two-pass extraction: raw events + aggregated summaries
 - [x] Multi-document analysis with cross-referencing
+- [x] document_parser.py: PDF, images (OCR via Vision), docx, xlsx, csv, md, txt
+- [x] analysis.py: contradiction finding, testable hypothesis generation
+- [x] Interactive refinement: asks for additional docs to fill gaps
+- [x] Call log parsing: CSV, JSON, PDF, HTML, TXT, XLSX
+- [x] Pattern matching for 6 common carrier call log formats
+- [x] Cross-document timeline extraction from mixed file types
+- [x] New CLI commands: 'call-log' and 'multi'
 - [x] document_parser.py: PDF, images (OCR via Vision), docx, xlsx, csv, md, txt
 - [x] analysis.py: contradiction finding, testable hypothesis generation
 - [x] Interactive refinement: asks for additional docs to fill gaps
