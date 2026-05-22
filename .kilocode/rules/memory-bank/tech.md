@@ -1,14 +1,22 @@
-# Technical Context: Next.js Starter Template
+# Technical Context: Timeline Intelligence Engine + Next.js
 
 ## Technology Stack
 
-| Technology   | Version | Purpose                         |
-| ------------ | ------- | ------------------------------- |
-| Next.js      | 16.x    | React framework with App Router |
-| React        | 19.x    | UI library                      |
-| TypeScript   | 5.9.x   | Type-safe JavaScript            |
-| Tailwind CSS | 4.x     | Utility-first CSS               |
-| Bun          | Latest  | Package manager & runtime       |
+### Python Module (Timeline Extraction)
+| Technology | Purpose |
+|------------|---------|
+| Python 3.11+ | Core extraction logic |
+| Gemini/OpenAI API | LLM-powered event extraction |
+| Standard Library | csv, json, re, urllib |
+
+### Next.js (CaseCraft Prototype UI)
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| Next.js | 16.x | React framework with App Router |
+| React | 19.x | UI library |
+| TypeScript | 5.9.x | Type-safe JavaScript |
+| Tailwind CSS | 4.x | Utility-first CSS |
+| Bun | Latest | Package manager & runtime |
 
 ## Development Environment
 
