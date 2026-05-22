@@ -31,6 +31,29 @@ Event types to detect and tag:
 - CHILD_STATEMENT (anything a child said, direct or reported)
 - COURT_ORDER_REFERENCE (any mention of orders, agreements, lawyers)
 - THREAT_OR_PRESSURE (explicit or implicit)
+- CALL_INITIATED (who called whom, answered or not)
+- CALL_DROPPED (call dropped mid-conversation)
+- CALL_REFUSED (explicitly refused to answer)
+- CALL_MISSED (missed without response)
+
+Output as CSV with headers."""
+
+
+CALL_LOG_EXTRACTION_PROMPT = """You are a forensic call log analysis engine. Your input is a parsed call log from a co-parent in active litigation. Extract every call event and cross-reference with the SMS timeline when possible.
+
+For every call event extracted, output exactly this structure:
+DATE | TIME | CALLER | RECIPIENT | CALL_TYPE | DURATION | ANSWERED | LEGAL_SIGNIFICANCE
+
+Call types: INCOMING | OUTGOING | MISSED | REFUSED | DROPPED
+Duration format: MM:SS or total seconds
+Answered: YES | NO | DROPPED
+
+Special events to flag:
+- Calls that correlate with SMS messages about "calling" or "not answering"
+- Patterns of calls immediately before/after scheduled pickups
+- Calls to/from third parties (Ricky, Terry, Cody)
+- Unusual call patterns (multiple calls in short succession, calls during alleged CYS supervision)
+- Calls that contradict stated reasons for missed visits
 
 Output as CSV with headers."""
 
@@ -167,6 +190,43 @@ def extract_with_llm(raw_text: str, api_key: str = None, model: str = "gemini-2.
     """Extract timeline events from raw SMS text using LLM."""
     output = call_llm(EXTRACTION_PROMPT, raw_text, api_key, model)
     return parse_csv_output(output)
+
+
+def extract_call_log(call_log_text: str, api_key: str = None, model: str = "gemini-2.0-flash") -> list[dict]:
+    """Extract call events from parsed call log using LLM."""
+    output = call_llm(CALL_LOG_EXTRACTION_PROMPT, call_log_text, api_key, model)
+    return parse_call_csv_output(output)
+
+
+def parse_call_csv_output(output: str) -> list[dict]:
+    """Parse CSV-formatted LLM call log output into list of event dicts."""
+    lines = output.strip().split('\n')
+    if not lines:
+        return []
+
+    header = lines[0]
+    if not header.startswith('DATE'):
+        return []
+
+    events = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        parts = line.split('|')
+        if len(parts) >= 6:
+            event = {
+                'date': parts[0].strip(),
+                'time': parts[1].strip() if len(parts) > 1 else '',
+                'caller': parts[2].strip() if len(parts) > 2 else '',
+                'recipient': parts[3].strip() if len(parts) > 3 else '',
+                'call_type': parts[4].strip() if len(parts) > 4 else '',
+                'duration': parts[5].strip() if len(parts) > 5 else '',
+                'answered': parts[6].strip() if len(parts) > 6 else '',
+                'legal_significance': parts[7].strip() if len(parts) > 7 else ''
+            }
+            events.append(event)
+
+    return events
 
 
 def aggregate_summary(events: list[dict], api_key: str = None, model: str = "gemini-2.0-flash") -> dict:

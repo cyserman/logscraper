@@ -4,9 +4,10 @@ import sys
 import os
 from typing import Iterator
 
-from .extraction import extract_with_llm, aggregate_summary
+from .extraction import extract_with_llm, extract_call_log, aggregate_summary
 from .document_parser import parse_document
 from .analysis import analyze_documents, test_hypothesis_with_document, request_additional_info
+from .call_log_parser import parse_call_log
 
 
 def extract_timeline(raw_text: str, api_key: str = None) -> dict:
@@ -137,6 +138,48 @@ def add_document_to_case(case_state: dict, filename: str, api_key: str = None) -
     return analyze_documents(new_documents, api_key)
 
 
+def extract_call_log_events(call_log_file: str, api_key: str = None) -> list[dict]:
+    """
+    Extract call events from a call log file.
+
+    Supports: CSV, JSON, PDF, HTML, TXT, XLSX formats.
+
+    Returns list of call event dicts with:
+    - date, time, caller, recipient, call_type, duration, answered, legal_significance
+    """
+    call_log_text = parse_call_log(call_log_file)
+    return extract_call_log(call_log_text, api_key)
+
+
+def extract_timeline_from_documents(
+    documents: dict[str, str],
+    api_key: str = None
+) -> dict:
+    """
+    Extract timeline from multiple document types (SMS, call logs, PDFs, etc).
+    All text is concatenated and processed together for cross-document analysis.
+    """
+    all_text_parts = []
+    for name, content in documents.items():
+        all_text_parts.append(f"=== {name} ===\n{content}")
+
+    combined_text = "\n\n".join(all_text_parts)
+
+    all_events = []
+    for i, chunk in enumerate(chunk_text(combined_text)):
+        print(f"Processing chunk {i+1}...")
+        result = extract_with_llm(chunk, api_key)
+        all_events.extend(result)
+
+    print(f"Extracted {len(all_events)} events total")
+    summary = aggregate_summary(all_events, api_key)
+
+    return {
+        'events': all_events,
+        'summary': summary
+    }
+
+
 if __name__ == '__main__':
     import argparse
 
@@ -147,9 +190,17 @@ if __name__ == '__main__':
     extract_parser.add_argument('input_file', help='Input SMS text file')
     extract_parser.add_argument('-o', '--output', default='./output', help='Output directory')
 
+    call_parser = subparsers.add_parser('call-log', help='Extract events from call log')
+    call_parser.add_argument('input_file', help='Input call log file (CSV, JSON, PDF, HTML, TXT, XLSX)')
+    call_parser.add_argument('-o', '--output', default='./output/calls.csv', help='Output CSV file')
+
     analyze_parser = subparsers.add_parser('analyze', help='Analyze documents for contradictions')
     analyze_parser.add_argument('files', nargs='+', help='Input document files')
-    analyze_parser.add_argument('-o', '--output', default='./analysis', help='Output file')
+    analyze_parser.add_argument('-o', '--output', default='./analysis.txt', help='Output file')
+
+    multi_parser = subparsers.add_parser('multi', help='Extract timeline from multiple document types')
+    multi_parser.add_argument('files', nargs='+', help='Input files (SMS, call logs, PDFs, etc)')
+    multi_parser.add_argument('-o', '--output', default='./output', help='Output directory')
 
     args = parser.parse_args()
 
@@ -162,6 +213,19 @@ if __name__ == '__main__':
         write_summary_tables(result['summary'], args.output)
         print(f"Extracted {len(result['events'])} events")
 
+    elif args.command == 'call-log':
+        api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
+        events = extract_call_log_events(args.input_file, api_key)
+        os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
+        with open(args.output, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['DATE', 'TIME', 'CALLER', 'RECIPIENT', 'CALL_TYPE', 'DURATION', 'ANSWERED', 'LEGAL_SIGNIFICANCE'])
+            for e in events:
+                writer.writerow([e.get('date', ''), e.get('time', ''), e.get('caller', ''),
+                               e.get('recipient', ''), e.get('call_type', ''), e.get('duration', ''),
+                               e.get('answered', ''), e.get('legal_significance', '')])
+        print(f"Extracted {len(events)} call events to {args.output}")
+
     elif args.command == 'analyze':
         api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
         documents = {}
@@ -173,6 +237,16 @@ if __name__ == '__main__':
         with open(args.output, 'w') as f:
             f.write(result['raw_analysis'])
         print(f"Analysis written to {args.output}")
+
+    elif args.command == 'multi':
+        api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
+        documents = {}
+        for f in args.files:
+            documents[f] = parse_document(f)
+        result = extract_timeline_from_documents(documents, api_key)
+        events_to_csv(result['events'], f'{args.output}/events.csv')
+        write_summary_tables(result['summary'], args.output)
+        print(f"Extracted {len(result['events'])} events from {len(documents)} documents")
 
     else:
         parser.print_help()
