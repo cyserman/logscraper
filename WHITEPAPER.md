@@ -230,6 +230,98 @@ The system makes no writes to the original evidence files. All output is written
 
 ---
 
-## 10. Repository
+## 10. Quick-Start Copy/Paste Reference
+
+> These blocks are safe to run in order on a fresh Ubuntu/Debian machine.
+
+**Step 1 — Clone and enter the project**
+```bash
+# Clones via SSH — requires your GitHub SSH key to be added
+git clone git@github.com:cyserman/logscraper.git
+cd logscraper
+```
+
+**Step 2 — Python backend setup**
+```bash
+# Creates an isolated Python environment (keeps system Python clean)
+python3 -m venv .venv
+source .venv/bin/activate      # activate — you'll see (.venv) in your prompt
+
+# Installs the API server and file-upload support
+pip install fastapi "uvicorn[standard]" python-multipart
+
+# Optional: PDF, Word, and Excel parsing
+pip install pdfplumber python-docx openpyxl
+```
+
+**Step 3 — Configure your API key**
+```bash
+# Copy the example env file and fill in your key
+cp .env.example .env
+# Then edit .env and set one of:
+#   GEMINI_API_KEY=...
+#   OPENAI_API_KEY=...
+#   OPENROUTER_API_KEY=...
+# No key needed if using Ollama locally
+```
+
+**Step 4 — Start the Python backend**
+```bash
+# Must be in the project directory with .venv active
+source .venv/bin/activate
+python backend_api.py
+# Running at http://localhost:8000
+# API docs at http://localhost:8000/docs
+```
+
+**Step 5 — Start the frontend (separate terminal)**
+```bash
+bun install        # first time only
+bun dev            # http://localhost:3000
+```
+
+**Step 6 — CLI extraction (no frontend needed)**
+```bash
+source .venv/bin/activate
+
+# SMS timeline from a text file
+python -m timeline_extractor extract my_sms_export.txt -o ./output
+
+# Call log from CSV
+python -m timeline_extractor call-log call_log.csv -o ./output/calls.csv
+
+# Use local Ollama instead of cloud API
+# (Ollama must be running: ollama serve)
+python -m timeline_extractor extract my_sms_export.txt \
+  --model ollama/hermes3:latest -o ./output
+
+# Cross-reference multiple documents at once
+python -m timeline_extractor multi sms.txt calls.csv exhibit.pdf -o ./output
+```
+
+**Step 7 — Run tests**
+```bash
+# No API key needed — tests only cover parsing logic
+python3 test_parsing.py -v
+```
+
+**Useful Ollama commands**
+```bash
+ollama serve                   # start Ollama daemon if not running
+ollama list                    # see installed models
+ollama pull hermes3            # download hermes3 (best for structured extraction)
+ollama run hermes3             # test it interactively
+```
+
+**Re-activating your environment after a reboot**
+```bash
+cd ~/path/to/logscraper
+source .venv/bin/activate      # always do this before running Python commands
+python backend_api.py
+```
+
+---
+
+## 11. Repository
 
 [github.com/cyserman/logscraper](https://github.com/cyserman/logscraper)
