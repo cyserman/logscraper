@@ -1,0 +1,15 @@
+# Python dependencies for LogScraper Forensic Timeline Extractor
+# The core extraction engine uses only Python standard library modules:
+# - json, csv, sys, os, typing, urllib.request, urllib.parse
+#
+# No external dependencies are required for basic functionality.
+# For LLM API access, you need internet connectivity and valid API keys.
+#
+# If you want to add optional enhancements in the future, consider:
+# - pandas for advanced data analysis
+# - python-docx for Word document parsing
+# - PyPDF2 for PDF text extraction
+# - openpyxl for Excel spreadsheet handling
+
+# This file is intentionally empty/minimal as the core functionality
+# requires no external packages beyond Python standard library.

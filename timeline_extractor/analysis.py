@@ -1,5 +1,4 @@
 import json
-from typing import Optional
 from .extraction import call_llm
 
 
@@ -32,7 +31,7 @@ Also list any additional documents or data that would strengthen the analysis.""
 
 HYPOTHESIS_TEST_PROMPT = """You have extracted the following contradictions and hypotheses from document analysis:
 
-{hy potheses}
+{hypotheses}
 
 Now test each hypothesis against this ADDITIONAL DOCUMENT:
 {new_document}
@@ -142,5 +141,5 @@ def _parse_analysis_response(response: str, result: dict) -> None:
             result[current_section].append(current_item)
             current_item = {}
 
-    if current_item:
+    if current_item and current_section:
         result[current_section].append(current_item)

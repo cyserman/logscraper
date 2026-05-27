@@ -1,6 +1,5 @@
 import os
 import json
-import re
 from typing import Optional
 
 
@@ -96,7 +95,7 @@ def parse_csv_output(output: str) -> list[dict]:
                 'actor': parts[2].strip() if len(parts) > 2 else '',
                 'event_type': parts[3].strip() if len(parts) > 3 else '',
                 'fact': parts[4].strip() if len(parts) > 4 else '',
-                'quote': parts[5].strip() if len(parts) > 6 else '',
+                'quote': parts[5].strip() if len(parts) > 5 else '',
                 'legal_significance': parts[6].strip() if len(parts) > 6 else ''
             }
             events.append(event)
@@ -105,25 +104,55 @@ def parse_csv_output(output: str) -> list[dict]:
 
 
 def call_llm(prompt: str, content: str, api_key: Optional[str] = None,
-             model: str = "gemini-2.0-flash") -> str:
+             model: str = "gemini-2.0-flash",
+             base_url: Optional[str] = None) -> str:
     """
     Call LLM API with extraction prompt and SMS content.
 
     Supports:
     - Google Gemini via GEMINI_API_KEY env var
     - OpenAI via OPENAI_API_KEY env var
+    - OpenRouter via OPENROUTER_API_KEY env var (set base_url or use 'openrouter/' prefix)
+    - Ollama locally (set base_url='http://localhost:11434/v1', no key needed)
+
+    base_url overrides the default endpoint for OpenAI-compatible providers.
     """
-    api_key = api_key or os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
+    # Explicit base_url → OpenAI-compatible provider (OpenRouter, Ollama, etc.)
+    if base_url:
+        resolved_key = api_key or os.environ.get('OPENROUTER_API_KEY') or 'ollama'
+        return call_openai(prompt, content, resolved_key, model, base_url=base_url)
 
-    if not api_key:
-        raise ValueError("No API key provided. Set GEMINI_API_KEY or OPENAI_API_KEY environment variable.")
+    # OpenRouter shorthand: model name prefixed with "openrouter/"
+    if model.startswith('openrouter/'):
+        resolved_key = api_key or os.environ.get('OPENROUTER_API_KEY')
+        if not resolved_key:
+            raise ValueError("No API key provided. Set OPENROUTER_API_KEY for OpenRouter models.")
+        real_model = model[len('openrouter/'):]
+        return call_openai(prompt, content, resolved_key, real_model,
+                           base_url='https://openrouter.ai/api/v1')
 
-    if 'gemini' in model.lower() or 'claude' in model.lower():
-        return call_gemini(prompt, content, api_key, model)
+    # Ollama shorthand: model name prefixed with "ollama/"
+    if model.startswith('ollama/'):
+        real_model = model[len('ollama/'):]
+        ollama_url = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434/v1')
+        return call_openai(prompt, content, 'ollama', real_model, base_url=ollama_url)
+
+    if 'gemini' in model.lower():
+        resolved_key = api_key or os.environ.get('GEMINI_API_KEY')
+        if not resolved_key:
+            raise ValueError("No API key provided. Set GEMINI_API_KEY for Gemini models.")
+        return call_gemini(prompt, content, resolved_key, model)
     elif 'gpt' in model.lower() or 'o3' in model.lower() or 'o4' in model.lower():
-        return call_openai(prompt, content, api_key, model)
+        resolved_key = api_key or os.environ.get('OPENAI_API_KEY')
+        if not resolved_key:
+            raise ValueError("No API key provided. Set OPENAI_API_KEY for OpenAI models.")
+        return call_openai(prompt, content, resolved_key, model)
     else:
-        raise ValueError(f"Unsupported model: {model}")
+        raise ValueError(
+            f"Unsupported model: {model}. "
+            "Use gemini-*, gpt-*, o3-*, o4-*, openrouter/<model>, ollama/<model>, "
+            "or pass base_url for any OpenAI-compatible endpoint."
+        )
 
 
 def call_gemini(system_prompt: str, user_content: str, api_key: str, model: str) -> str:
@@ -157,11 +186,12 @@ def call_gemini(system_prompt: str, user_content: str, api_key: str, model: str)
         raise RuntimeError(f"Gemini API call failed: {e}")
 
 
-def call_openai(system_prompt: str, user_content: str, api_key: str, model: str) -> str:
-    """Call OpenAI API."""
+def call_openai(system_prompt: str, user_content: str, api_key: str, model: str,
+                base_url: str = "https://api.openai.com/v1") -> str:
+    """Call any OpenAI-compatible API (OpenAI, OpenRouter, Ollama, etc.)."""
     import urllib.request
 
-    url = "https://api.openai.com/v1/chat/completions"
+    url = f"{base_url.rstrip('/')}/chat/completions"
 
     payload = {
         "model": model,
@@ -186,15 +216,17 @@ def call_openai(system_prompt: str, user_content: str, api_key: str, model: str)
         raise RuntimeError(f"OpenAI API call failed: {e}")
 
 
-def extract_with_llm(raw_text: str, api_key: str = None, model: str = "gemini-2.0-flash") -> list[dict]:
+def extract_with_llm(raw_text: str, api_key: str = None, model: str = "gemini-2.0-flash",
+                     base_url: str = None) -> list[dict]:
     """Extract timeline events from raw SMS text using LLM."""
-    output = call_llm(EXTRACTION_PROMPT, raw_text, api_key, model)
+    output = call_llm(EXTRACTION_PROMPT, raw_text, api_key, model, base_url=base_url)
     return parse_csv_output(output)
 
 
-def extract_call_log(call_log_text: str, api_key: str = None, model: str = "gemini-2.0-flash") -> list[dict]:
+def extract_call_log(call_log_text: str, api_key: str = None, model: str = "gemini-2.0-flash",
+                     base_url: str = None) -> list[dict]:
     """Extract call events from parsed call log using LLM."""
-    output = call_llm(CALL_LOG_EXTRACTION_PROMPT, call_log_text, api_key, model)
+    output = call_llm(CALL_LOG_EXTRACTION_PROMPT, call_log_text, api_key, model, base_url=base_url)
     return parse_call_csv_output(output)
 
 
@@ -229,13 +261,14 @@ def parse_call_csv_output(output: str) -> list[dict]:
     return events
 
 
-def aggregate_summary(events: list[dict], api_key: str = None, model: str = "gemini-2.0-flash") -> dict:
+def aggregate_summary(events: list[dict], api_key: str = None, model: str = "gemini-2.0-flash",
+                      base_url: str = None) -> dict:
     """Generate summary tables from extracted events using LLM."""
     events_csv = "DATE,TIME,ACTOR,EVENT_TYPE,FACT,QUOTE,LEGAL_SIGNIFICANCE\n"
     for e in events:
         events_csv += f"{e['date']},{e['time']},{e['actor']},{e['event_type']},{e['fact']},{e['quote']},{e['legal_significance']}\n"
 
-    output = call_llm(AGGREGATION_PROMPT, events_csv, api_key, model)
+    output = call_llm(AGGREGATION_PROMPT, events_csv, api_key, model, base_url=base_url)
 
     summary = {'contradictions': []}
 
@@ -272,6 +305,6 @@ def aggregate_summary(events: list[dict], api_key: str = None, model: str = "gem
             current_section = 'third_party_mentions'
             summary[current_section] = []
         elif current_section and line and not line.startswith('DATE'):
-            pass
+            summary[current_section].append({'raw': line})
 
     return summary

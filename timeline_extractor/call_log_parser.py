@@ -202,14 +202,32 @@ def _parse_spreadsheet_call_log(path: str) -> str:
 
     for sheet_name in wb.sheetnames:
         sheet = wb[sheet_name]
-        for row in sheet.iter_rows(values_only=True):
-            row_str = ' | '.join([str(c) if c else '' for c in row])
-            parsed = _try_parse_call_line(row_str)
-            if parsed:
-                date, time, number, call_type, duration = parsed
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            continue
+
+        header = [str(c).lower().strip() if c is not None else '' for c in rows[0]]
+        date_idx = next((i for i, h in enumerate(header) if 'date' in h), None)
+        time_idx = next((i for i, h in enumerate(header) if 'time' in h), None)
+        num_idx = next((i for i, h in enumerate(header) if any(k in h for k in ('number', 'caller', 'phone'))), None)
+        type_idx = next((i for i, h in enumerate(header) if any(k in h for k in ('type', 'direction'))), None)
+        dur_idx = next((i for i, h in enumerate(header) if any(k in h for k in ('duration', 'length'))), None)
+
+        if date_idx is not None:
+            for row in rows[1:]:
+                if not any(c for c in row if c is not None):
+                    continue
+                date = str(row[date_idx]) if date_idx < len(row) and row[date_idx] is not None else ''
+                time = str(row[time_idx]) if time_idx is not None and time_idx < len(row) and row[time_idx] is not None else ''
+                number = str(row[num_idx]) if num_idx is not None and num_idx < len(row) and row[num_idx] is not None else ''
+                call_type = str(row[type_idx]).upper() if type_idx is not None and type_idx < len(row) and row[type_idx] is not None else 'UNKNOWN'
+                duration = str(row[dur_idx]) if dur_idx is not None and dur_idx < len(row) and row[dur_idx] is not None else '0:00'
                 entries.append(f"{date} {time} | {call_type} CALL | {number} | Duration: {duration}")
-            elif any(c for c in row if c):
-                entries.append(row_str)
+        else:
+            for row in rows:
+                row_str = ' | '.join([str(c) if c is not None else '' for c in row])
+                if any(c for c in row if c is not None):
+                    entries.append(row_str)
 
     return '\n'.join(entries) if entries else ""
 

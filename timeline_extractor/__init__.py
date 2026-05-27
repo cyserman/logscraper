@@ -4,7 +4,7 @@ import sys
 import os
 from typing import Iterator
 
-from .extraction import extract_with_llm, extract_call_log, aggregate_summary
+from .extraction import extract_with_llm, extract_call_log, aggregate_summary, parse_csv_output, parse_call_csv_output
 from .document_parser import parse_document
 from .analysis import analyze_documents, test_hypothesis_with_document, request_additional_info
 from .call_log_parser import parse_call_log
