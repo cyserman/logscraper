@@ -2,7 +2,12 @@ import json
 import csv
 import sys
 import os
+import hashlib
+import platform
 from typing import Iterator
+from datetime import datetime, timezone
+
+EXTRACTOR_VERSION = '0.1.0'
 
 from .extraction import extract_with_llm, extract_call_log, aggregate_summary, parse_csv_output, parse_call_csv_output
 from .document_parser import parse_document
@@ -13,8 +18,98 @@ from .cross_reference import cross_reference_sms_calls
 _CONTRADICTION_KEYWORDS = frozenset(['CONTRADICT', 'PRIOR STATEMENT', 'INCONSISTENT', 'FALSUS'])
 
 
+def generate_manifest(
+    case_id: str,
+    sms_path: str = None,
+    call_log_path: str = None,
+    model: str = None,
+    event_count: int = 0,
+    contradiction_count: int = 0,
+) -> dict:
+    """Generate a chain of custody record for the extraction run."""
+    def file_meta(path):
+        if not path or not os.path.exists(path):
+            return None
+        h = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                h.update(chunk)
+        return {
+            'path': os.path.abspath(path),
+            'sha256': h.hexdigest(),
+            'size_bytes': os.path.getsize(path),
+        }
+
+    return {
+        'case_id': case_id,
+        'processed_at': datetime.now(timezone.utc).isoformat(),
+        'extractor_version': EXTRACTOR_VERSION,
+        'model': model or 'unknown',
+        'platform': platform.platform(),
+        'inputs': {
+            'sms_file': file_meta(sms_path),
+            'call_log': file_meta(call_log_path),
+        },
+        'event_count': event_count,
+        'contradiction_count': contradiction_count,
+    }
+
+
+def save_results(
+    output_dir: str,
+    events: list[dict],
+    contradictions: list[dict],
+    summary: dict,
+    case_id: str,
+    call_events: list[dict] = None,
+    sms_path: str = None,
+    call_log_path: str = None,
+    model: str = None,
+) -> dict:
+    """Write all output CSVs and a chain of custody manifest. Returns the manifest dict."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    events_to_csv(events, os.path.join(output_dir, 'events.csv'))
+    write_summary_tables(summary, output_dir)
+
+    if contradictions:
+        contradictions_to_csv(
+            contradictions,
+            os.path.join(output_dir, f'{case_id}_contradictions.csv'),
+        )
+
+    if call_events:
+        call_events_path = os.path.join(output_dir, 'call_events.csv')
+        with open(call_events_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['DATE', 'TIME', 'CALLER', 'RECIPIENT',
+                             'CALL_TYPE', 'DURATION', 'ANSWERED', 'LEGAL_SIGNIFICANCE'])
+            for e in call_events:
+                writer.writerow([
+                    e.get('date', ''), e.get('time', ''), e.get('caller', ''),
+                    e.get('recipient', ''), e.get('call_type', ''), e.get('duration', ''),
+                    e.get('answered', ''), e.get('legal_significance', ''),
+                ])
+
+    manifest = generate_manifest(
+        case_id=case_id,
+        sms_path=sms_path,
+        call_log_path=call_log_path,
+        model=model,
+        event_count=len(events),
+        contradiction_count=len(contradictions),
+    )
+    manifest_path = os.path.join(output_dir, f'{case_id}_manifest.json')
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+    print(f"Manifest: {manifest_path}")
+
+    return manifest
+
+
 def extract_timeline(raw_text: str, api_key: str = None,
-                     model: str = "gemini-2.0-flash", base_url: str = None) -> dict:
+                     model: str = "gemini-2.0-flash", base_url: str = None,
+                     third_parties: list[str] = None) -> dict:
     """
     Extract structured timeline events from raw SMS text.
 
@@ -28,7 +123,8 @@ def extract_timeline(raw_text: str, api_key: str = None,
 
     for i, chunk in enumerate(chunk_text(raw_text)):
         print(f"Processing chunk {i+1}...")
-        result = extract_with_llm(chunk, api_key, model=model, base_url=base_url)
+        result = extract_with_llm(chunk, api_key, model=model, base_url=base_url,
+                                   third_parties=third_parties)
         for event in result:
             all_events.append(event)
             combined = (
@@ -127,6 +223,7 @@ def extract_timeline_with_calls(
     api_key: str = None,
     model: str = "gemini-2.0-flash",
     base_url: str = None,
+    third_parties: list[str] = None,
 ) -> dict:
     """
     Extract SMS timeline and call log events, then cross-reference for contradictions.
@@ -137,8 +234,10 @@ def extract_timeline_with_calls(
     - contradictions: LLM-flagged + cross-reference contradictions combined
     - summary: aggregated summary tables
     """
-    sms_result = extract_timeline(sms_text, api_key, model=model, base_url=base_url)
-    call_events = extract_call_log_events(call_log_file, api_key, model=model, base_url=base_url)
+    sms_result = extract_timeline(sms_text, api_key, model=model, base_url=base_url,
+                                  third_parties=third_parties)
+    call_events = extract_call_log_events(call_log_file, api_key, model=model, base_url=base_url,
+                                          third_parties=third_parties)
 
     cross_ref = cross_reference_sms_calls(sms_result['events'], call_events)
     all_contradictions = sms_result['contradictions'] + cross_ref
@@ -214,7 +313,8 @@ def add_document_to_case(case_state: dict, filename: str, api_key: str = None) -
 
 
 def extract_call_log_events(call_log_file: str, api_key: str = None,
-                            model: str = "gemini-2.0-flash", base_url: str = None) -> list[dict]:
+                            model: str = "gemini-2.0-flash", base_url: str = None,
+                            third_parties: list[str] = None) -> list[dict]:
     """
     Extract call events from a call log file.
 
@@ -224,7 +324,8 @@ def extract_call_log_events(call_log_file: str, api_key: str = None,
     - date, time, caller, recipient, call_type, duration, answered, legal_significance
     """
     call_log_text = parse_call_log(call_log_file)
-    return extract_call_log(call_log_text, api_key, model=model, base_url=base_url)
+    return extract_call_log(call_log_text, api_key, model=model, base_url=base_url,
+                            third_parties=third_parties)
 
 
 def extract_timeline_from_documents(

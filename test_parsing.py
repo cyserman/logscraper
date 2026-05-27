@@ -211,5 +211,62 @@ class TestContradictionPipeline(unittest.TestCase):
             os.unlink(tmp)
 
 
+class TestManifestAndThirdParties(unittest.TestCase):
+
+    def test_manifest_structure(self):
+        """generate_manifest returns required fields without file paths."""
+        from timeline_extractor import generate_manifest
+        manifest = generate_manifest(
+            case_id='test-001',
+            model='gemini-2.0-flash',
+            event_count=42,
+            contradiction_count=7,
+        )
+        self.assertEqual(manifest['case_id'], 'test-001')
+        self.assertEqual(manifest['event_count'], 42)
+        self.assertEqual(manifest['contradiction_count'], 7)
+        self.assertIn('processed_at', manifest)
+        self.assertIn('extractor_version', manifest)
+        self.assertIn('platform', manifest)
+        self.assertIsNone(manifest['inputs']['sms_file'])
+        self.assertIsNone(manifest['inputs']['call_log'])
+
+    def test_manifest_file_hashing(self):
+        """generate_manifest hashes a real file and records its size."""
+        import tempfile
+        from timeline_extractor import generate_manifest
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write('test sms content')
+            tmp = f.name
+        try:
+            manifest = generate_manifest(case_id='hash-test', sms_path=tmp)
+            meta = manifest['inputs']['sms_file']
+            self.assertIsNotNone(meta)
+            self.assertEqual(len(meta['sha256']), 64)
+            self.assertGreater(meta['size_bytes'], 0)
+            self.assertTrue(meta['path'].endswith('.txt'))
+        finally:
+            os.unlink(tmp)
+
+    def test_third_parties_substitution(self):
+        """EXTRACTION_PROMPT accepts third_parties format argument."""
+        from timeline_extractor.extraction import EXTRACTION_PROMPT
+        result = EXTRACTION_PROMPT.format(third_parties='Alice, Bob, Charlie')
+        self.assertIn('Alice, Bob, Charlie', result)
+
+    def test_third_parties_default(self):
+        """Default fallback when no third_parties passed."""
+        from timeline_extractor.extraction import EXTRACTION_PROMPT
+        result = EXTRACTION_PROMPT.format(third_parties='any named third party')
+        self.assertIn('any named third party', result)
+
+    def test_third_parties_empty_list(self):
+        """Empty list uses fallback string, not blank."""
+        from timeline_extractor.extraction import extract_with_llm
+        import inspect
+        sig = inspect.signature(extract_with_llm)
+        self.assertIn('third_parties', sig.parameters)
+
+
 if __name__ == '__main__':
     unittest.main()

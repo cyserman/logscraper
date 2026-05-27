@@ -11,7 +11,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from timeline_extractor import extract_timeline, extract_call_log_events
+from timeline_extractor import extract_timeline, extract_call_log_events, generate_manifest
 
 app = FastAPI(title="LogScraper API", version="1.0")
 
@@ -27,6 +27,8 @@ class SMSRequest(BaseModel):
     text: str
     model: str = "gemini-2.0-flash"
     base_url: str | None = None
+    third_parties: list[str] = []
+    case_id: str = "case"
 
 
 @app.get("/health")
@@ -47,8 +49,19 @@ def extract_sms(req: SMSRequest):
         or os.environ.get("OPENROUTER_API_KEY")
     )
     try:
-        result = extract_timeline(req.text, api_key, model=req.model, base_url=req.base_url)
-        return result
+        result = extract_timeline(
+            req.text, api_key,
+            model=req.model,
+            base_url=req.base_url,
+            third_parties=req.third_parties or None,
+        )
+        manifest = generate_manifest(
+            case_id=req.case_id,
+            model=req.model,
+            event_count=len(result['events']),
+            contradiction_count=len(result['contradictions']),
+        )
+        return {**result, 'manifest': manifest}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -77,7 +90,13 @@ async def extract_calls(
             tmp_path = tmp.name
 
         events = extract_call_log_events(tmp_path, api_key, model=model, base_url=base_url)
-        return {"events": events, "count": len(events)}
+        manifest = generate_manifest(
+            case_id='call_log',
+            call_log_path=tmp_path,
+            model=model,
+            event_count=len(events),
+        )
+        return {"events": events, "count": len(events), "manifest": manifest}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

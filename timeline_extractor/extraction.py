@@ -22,7 +22,7 @@ Event types to detect and tag:
 - SCHEDULE_CHANGE (who initiated, notice given)
 - ALLEGATION (what alleged, by whom)
 - CYS_REFERENCE (case status mentioned)
-- THIRD_PARTY_REFERENCE (Ricky/Terry/other named)
+- THIRD_PARTY_REFERENCE ({third_parties})
 - TRAVEL (destination mentioned, children present)
 - HOLIDAY (which holiday, access granted or denied)
 - TOOL_PROPERTY (any mention of tools, belongings, garage access)
@@ -50,7 +50,7 @@ Answered: YES | NO | DROPPED
 Special events to flag:
 - Calls that correlate with SMS messages about "calling" or "not answering"
 - Patterns of calls immediately before/after scheduled pickups
-- Calls to/from third parties (Ricky, Terry, Cody)
+- Calls to/from third parties ({third_parties})
 - Unusual call patterns (multiple calls in short succession, calls during alleged CYS supervision)
 - Calls that contradict stated reasons for missed visits
 
@@ -217,16 +217,22 @@ def call_openai(system_prompt: str, user_content: str, api_key: str, model: str,
 
 
 def extract_with_llm(raw_text: str, api_key: str = None, model: str = "gemini-2.0-flash",
-                     base_url: str = None) -> list[dict]:
+                     base_url: str = None,
+                     third_parties: list[str] | None = None) -> list[dict]:
     """Extract timeline events from raw SMS text using LLM."""
-    output = call_llm(EXTRACTION_PROMPT, raw_text, api_key, model, base_url=base_url)
+    parties_str = ', '.join(third_parties) if third_parties else 'any named third party'
+    prompt = EXTRACTION_PROMPT.format(third_parties=parties_str)
+    output = call_llm(prompt, raw_text, api_key, model, base_url=base_url)
     return parse_csv_output(output)
 
 
 def extract_call_log(call_log_text: str, api_key: str = None, model: str = "gemini-2.0-flash",
-                     base_url: str = None) -> list[dict]:
+                     base_url: str = None,
+                     third_parties: list[str] | None = None) -> list[dict]:
     """Extract call events from parsed call log using LLM."""
-    output = call_llm(CALL_LOG_EXTRACTION_PROMPT, call_log_text, api_key, model, base_url=base_url)
+    parties_str = ', '.join(third_parties) if third_parties else 'any named third party'
+    prompt = CALL_LOG_EXTRACTION_PROMPT.format(third_parties=parties_str)
+    output = call_llm(prompt, call_log_text, api_key, model, base_url=base_url)
     return parse_call_csv_output(output)
 
 
