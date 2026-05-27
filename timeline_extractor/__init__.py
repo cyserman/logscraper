@@ -8,6 +8,9 @@ from .extraction import extract_with_llm, extract_call_log, aggregate_summary, p
 from .document_parser import parse_document
 from .analysis import analyze_documents, test_hypothesis_with_document, request_additional_info
 from .call_log_parser import parse_call_log
+from .cross_reference import cross_reference_sms_calls
+
+_CONTRADICTION_KEYWORDS = frozenset(['CONTRADICT', 'PRIOR STATEMENT', 'INCONSISTENT', 'FALSUS'])
 
 
 def extract_timeline(raw_text: str, api_key: str = None,
@@ -26,9 +29,16 @@ def extract_timeline(raw_text: str, api_key: str = None,
     for i, chunk in enumerate(chunk_text(raw_text)):
         print(f"Processing chunk {i+1}...")
         result = extract_with_llm(chunk, api_key, model=model, base_url=base_url)
-        all_events.extend(result)
+        for event in result:
+            all_events.append(event)
+            combined = (
+                (event.get('legal_significance') or '') + ' ' +
+                (event.get('fact') or '')
+            ).upper()
+            if any(kw in combined for kw in _CONTRADICTION_KEYWORDS):
+                all_contradictions.append(event)
 
-    print(f"Extracted {len(all_events)} events total")
+    print(f"Extracted {len(all_events)} events, {len(all_contradictions)} contradictions")
 
     summary = aggregate_summary(all_events, api_key, model=model, base_url=base_url)
 
@@ -77,6 +87,70 @@ def events_to_csv(events: list[dict], output_path: str) -> None:
                 event.get('quote', ''),
                 event.get('legal_significance', '')
             ])
+
+
+def contradictions_to_csv(contradictions: list[dict], output_path: str) -> None:
+    """Write contradictions list to CSV. Handles both LLM-flagged and cross-reference types."""
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    with open(output_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['DATE', 'ACTOR', 'PRIOR_STATEMENT', 'CONTRADICTING_ACTION',
+                         'CONTRADICTION_TYPE', 'QUOTE', 'SOURCE'])
+        for c in contradictions:
+            # Cross-reference format
+            if 'sms_claim' in c:
+                writer.writerow([
+                    c.get('date', ''),
+                    c.get('actor', ''),
+                    c.get('sms_claim', ''),
+                    c.get('call_log_fact', ''),
+                    c.get('contradiction_type', ''),
+                    c.get('sms_quote', ''),
+                    'cross_reference',
+                ])
+            else:
+                # LLM-flagged format
+                writer.writerow([
+                    c.get('date', ''),
+                    c.get('actor', ''),
+                    c.get('fact', ''),
+                    c.get('legal_significance', ''),
+                    c.get('event_type', ''),
+                    c.get('quote', ''),
+                    'llm_flagged',
+                ])
+
+
+def extract_timeline_with_calls(
+    sms_text: str,
+    call_log_file: str,
+    api_key: str = None,
+    model: str = "gemini-2.0-flash",
+    base_url: str = None,
+) -> dict:
+    """
+    Extract SMS timeline and call log events, then cross-reference for contradictions.
+
+    Returns dict with:
+    - events: SMS timeline events
+    - call_events: call log events
+    - contradictions: LLM-flagged + cross-reference contradictions combined
+    - summary: aggregated summary tables
+    """
+    sms_result = extract_timeline(sms_text, api_key, model=model, base_url=base_url)
+    call_events = extract_call_log_events(call_log_file, api_key, model=model, base_url=base_url)
+
+    cross_ref = cross_reference_sms_calls(sms_result['events'], call_events)
+    all_contradictions = sms_result['contradictions'] + cross_ref
+
+    print(f"Cross-reference found {len(cross_ref)} additional contradictions")
+
+    return {
+        'events': sms_result['events'],
+        'call_events': call_events,
+        'contradictions': all_contradictions,
+        'summary': sms_result['summary'],
+    }
 
 
 def write_summary_tables(summary: dict, output_dir: str) -> None:
