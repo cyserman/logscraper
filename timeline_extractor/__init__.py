@@ -10,7 +10,8 @@ from .analysis import analyze_documents, test_hypothesis_with_document, request_
 from .call_log_parser import parse_call_log
 
 
-def extract_timeline(raw_text: str, api_key: str = None) -> dict:
+def extract_timeline(raw_text: str, api_key: str = None,
+                     model: str = "gemini-2.0-flash", base_url: str = None) -> dict:
     """
     Extract structured timeline events from raw SMS text.
 
@@ -24,12 +25,12 @@ def extract_timeline(raw_text: str, api_key: str = None) -> dict:
 
     for i, chunk in enumerate(chunk_text(raw_text)):
         print(f"Processing chunk {i+1}...")
-        result = extract_with_llm(chunk, api_key)
+        result = extract_with_llm(chunk, api_key, model=model, base_url=base_url)
         all_events.extend(result)
 
     print(f"Extracted {len(all_events)} events total")
 
-    summary = aggregate_summary(all_events, api_key)
+    summary = aggregate_summary(all_events, api_key, model=model, base_url=base_url)
 
     return {
         'events': all_events,
@@ -138,7 +139,8 @@ def add_document_to_case(case_state: dict, filename: str, api_key: str = None) -
     return analyze_documents(new_documents, api_key)
 
 
-def extract_call_log_events(call_log_file: str, api_key: str = None) -> list[dict]:
+def extract_call_log_events(call_log_file: str, api_key: str = None,
+                            model: str = "gemini-2.0-flash", base_url: str = None) -> list[dict]:
     """
     Extract call events from a call log file.
 
@@ -148,7 +150,7 @@ def extract_call_log_events(call_log_file: str, api_key: str = None) -> list[dic
     - date, time, caller, recipient, call_type, duration, answered, legal_significance
     """
     call_log_text = parse_call_log(call_log_file)
-    return extract_call_log(call_log_text, api_key)
+    return extract_call_log(call_log_text, api_key, model=model, base_url=base_url)
 
 
 def extract_timeline_from_documents(
