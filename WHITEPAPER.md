@@ -184,6 +184,22 @@ LEGAL_SIGNIFICANCE — Model-assessed relevance to litigation
 
 Ten aggregation tables are generated per run, each designed to answer a specific evidentiary question a family court filing might need to address.
 
+### 5.3 Contradiction Record
+
+```
+DATE                  — Date of the contradiction
+ACTOR                 — Party whose statement or action is contradicted
+PRIOR_STATEMENT       — The earlier claim or SMS text
+CONTRADICTING_ACTION  — The call log fact or later statement that contradicts it
+CONTRADICTION_TYPE    — CALL_CLAIM_VS_LOG | BLOCKED_VS_ACTIVE | PICKUP_NO_CALL | llm_flagged
+QUOTE                 — Verbatim SMS text if available
+SOURCE                — cross_reference | llm_flagged
+```
+
+### 5.4 Chain of Custody Manifest
+
+See Section 9. Every `save_results()` call writes `{case_id}_manifest.json` alongside the CSVs.
+
 ---
 
 ## 6. Privacy and Chain of Custody
@@ -221,7 +237,97 @@ The system makes no writes to the original evidence files. All output is written
 
 ---
 
-## 9. Limitations
+## 9. Chain of Custody Manifest
+
+Every extraction run produces a `{case_id}_manifest.json` alongside the output CSVs. This record is designed to satisfy chain of custody requirements for digital evidence in family court proceedings.
+
+### 9.1 Manifest Schema
+
+```json
+{
+  "case_id": "smith-v-jones",
+  "processed_at": "2026-05-27T14:32:00.412847+00:00",
+  "extractor_version": "0.1.0",
+  "model": "gemini-2.0-flash",
+  "platform": "Linux-6.17.0-29-generic-x86_64",
+  "inputs": {
+    "sms_file": {
+      "path": "/absolute/path/to/sms_export.txt",
+      "sha256": "a3f9d2c1e84b7f...",
+      "size_bytes": 84210
+    },
+    "call_log": {
+      "path": "/absolute/path/to/call_log.csv",
+      "sha256": "f1c8e3a0d92b6e...",
+      "size_bytes": 12400
+    }
+  },
+  "event_count": 47,
+  "contradiction_count": 3
+}
+```
+
+### 9.2 Verification Properties
+
+- **SHA-256 hashes** of each input file are computed at extraction time using 8KB block streaming. Any alteration to the source file after extraction will produce a different hash, making tampering detectable.
+- **Absolute paths** are recorded so an expert witness can confirm which file was processed.
+- **`extractor_version`** pins the software version, enabling reproducibility audits.
+- **UTC timestamp** uses `datetime.now(timezone.utc)` — unambiguous regardless of machine timezone.
+
+### 9.3 Use in Proceedings
+
+The manifest does not authenticate the source files themselves (that requires carrier subpoena records or device forensics). It authenticates that **this specific extraction was performed on this specific unaltered file** at the recorded time. Combined with the source file's chain of custody documentation, it provides a complete audit trail from raw evidence to structured timeline.
+
+---
+
+## 10. Case-Specific Third-Party Configuration
+
+### 10.1 Problem with Hardcoded Names
+
+The initial extraction prompts referenced specific individuals by name (`Ricky`, `Terry`, `Cody`). This creates two problems:
+
+1. **Multi-tenant failure:** Different cases involve different people. Hardcoded names produce false positives on unrelated third parties and miss relevant ones.
+2. **Privacy exposure:** Prompt text containing real names is sent to cloud LLM providers, expanding the data footprint.
+
+### 10.2 Solution: `third_parties` Parameter
+
+Both extraction prompts now accept a `{third_parties}` format placeholder. The value is injected at call time:
+
+```python
+# Per-case configuration
+extract_timeline(
+    sms_text,
+    third_parties=["Marcus", "Denise", "Aunt Karen"],
+)
+
+# API request body
+{
+  "text": "...",
+  "third_parties": ["Marcus", "Denise"],
+  "case_id": "jones-v-jones-2026"
+}
+```
+
+When `third_parties` is empty or `None`, the fallback `"any named third party"` is substituted, preserving backward compatibility.
+
+### 10.3 Call Stack
+
+```
+/api/extract-sms (SMSRequest.third_parties)
+    └─ extract_timeline(third_parties)
+         └─ extract_with_llm(third_parties)
+              └─ EXTRACTION_PROMPT.format(third_parties=parties_str)
+
+extract_timeline_with_calls(third_parties)
+    ├─ extract_timeline(third_parties)
+    └─ extract_call_log_events(third_parties)
+         └─ extract_call_log(third_parties)
+              └─ CALL_LOG_EXTRACTION_PROMPT.format(third_parties=parties_str)
+```
+
+---
+
+## 12. Limitations
 
 - **LLM output consistency:** Structured CSV output depends on model instruction-following quality. Smaller models (< 7B parameters) may produce malformed rows that are silently dropped.
 - **Chunking context loss:** Events that span chunk boundaries may be missed or partially extracted.
@@ -230,7 +336,7 @@ The system makes no writes to the original evidence files. All output is written
 
 ---
 
-## 10. Quick-Start Copy/Paste Reference
+## 11. Quick-Start Copy/Paste Reference
 
 > These blocks are safe to run in order on a fresh Ubuntu/Debian machine.
 
@@ -322,6 +428,6 @@ python backend_api.py
 
 ---
 
-## 11. Repository
+## 13. Repository
 
 [github.com/cyserman/logscraper](https://github.com/cyserman/logscraper)
