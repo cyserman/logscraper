@@ -17,6 +17,14 @@ from .cross_reference import cross_reference_sms_calls
 
 _CONTRADICTION_KEYWORDS = frozenset(['CONTRADICT', 'PRIOR STATEMENT', 'INCONSISTENT', 'FALSUS'])
 
+# Exported for testing
+__all__ = [
+    'extract_timeline', 'extract_call_log_events', 'extract_timeline_with_calls',
+    'parse_csv_output', 'parse_call_csv_output', 'events_to_csv', 'contradictions_to_csv',
+    'generate_manifest', 'save_results', 'format_for_casecraft', '_normalize_captured_at',
+    '_CONTRADICTION_KEYWORDS',
+]
+
 
 def generate_manifest(
     case_id: str,
@@ -183,6 +191,70 @@ def events_to_csv(events: list[dict], output_path: str) -> None:
                 event.get('quote', ''),
                 event.get('legal_significance', '')
             ])
+
+
+def _normalize_captured_at(date_str: str) -> str:
+    """Normalize an event date string to ISO 8601 UTC for CaseCraft capturedAt field.
+    A wrong-but-parseable date is better than null for timeline ordering.
+    """
+    import re
+    if not date_str:
+        return ''
+    if re.match(r'\d{4}-\d{2}-\d{2}T', date_str):
+        return date_str
+    if re.match(r'\d{4}-\d{2}-\d{2}$', date_str.strip()):
+        return f"{date_str.strip()}T00:00:00+00:00"
+    if re.match(r'\d{4}-\d{2}-\d{2} ', date_str):
+        return date_str.replace(' ', 'T', 1) + '+00:00'
+    return date_str
+
+
+def format_for_casecraft(
+    events: list[dict],
+    contradictions: list[dict],
+    summary: dict,
+    manifest: dict,
+    case_id: str,
+    firm_id: str = None,
+) -> dict:
+    """Shape extraction output for CaseCraft EvidenceRecord ingestion.
+
+    Each event becomes a candidate EvidenceRecord payload.
+
+    CaseCraft's evidenceRecords table stores logscraper output as type='timeline_event'.
+    The integrityHash is computed by CaseCraft server-side after receipt.
+    LogScraper's manifest sha256 values cover the INPUT FILES only,
+    not the output records — these are two separate chain of custody layers.
+
+    deviceId is always 'logscraper' so CaseCraft's hash verification
+    produces consistent results across all extractions.
+    """
+    contradiction_ids = {id(e) for e in contradictions}
+
+    def event_to_evidence(event: dict) -> dict:
+        record = {
+            'caseId': case_id,
+            'type': 'timeline_event',
+            'content': json.dumps(event),
+            'capturedAt': _normalize_captured_at(event.get('date', '')),
+            'eventType': event.get('event_type', ''),
+            'deviceId': 'logscraper',
+            'isContradiction': id(event) in contradiction_ids,
+        }
+        if firm_id:
+            record['firmId'] = firm_id
+        return record
+
+    return {
+        'case_id': case_id,
+        'firm_id': firm_id,
+        'evidence_records': [event_to_evidence(e) for e in events],
+        'contradiction_records': [event_to_evidence(e) for e in contradictions],
+        'manifest': manifest,
+        'summary': summary,
+        'record_count': len(events),
+        'contradiction_count': len(contradictions),
+    }
 
 
 def contradictions_to_csv(contradictions: list[dict], output_path: str) -> None:
@@ -366,10 +438,13 @@ if __name__ == '__main__':
     extract_parser = subparsers.add_parser('extract', help='Extract timeline from SMS text')
     extract_parser.add_argument('input_file', help='Input SMS text file')
     extract_parser.add_argument('-o', '--output', default='./output', help='Output directory')
+    extract_parser.add_argument('--case-id', default='case', help='Case identifier for output filenames and manifest')
+    extract_parser.add_argument('--third-parties', nargs='*', help='Case-specific third-party names')
 
     call_parser = subparsers.add_parser('call-log', help='Extract events from call log')
     call_parser.add_argument('input_file', help='Input call log file (CSV, JSON, PDF, HTML, TXT, XLSX)')
-    call_parser.add_argument('-o', '--output', default='./output/calls.csv', help='Output CSV file')
+    call_parser.add_argument('-o', '--output', default='./output', help='Output directory')
+    call_parser.add_argument('--case-id', default='case', help='Case identifier for output filenames and manifest')
 
     analyze_parser = subparsers.add_parser('analyze', help='Analyze documents for contradictions')
     analyze_parser.add_argument('files', nargs='+', help='Input document files')
@@ -385,23 +460,41 @@ if __name__ == '__main__':
         api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
         with open(args.input_file, 'r') as f:
             raw_text = f.read()
-        result = extract_timeline(raw_text, api_key)
-        events_to_csv(result['events'], f'{args.output}/events.csv')
-        write_summary_tables(result['summary'], args.output)
-        print(f"Extracted {len(result['events'])} events")
+        case_id = args.case_id
+        result = extract_timeline(raw_text, api_key, third_parties=args.third_parties or None)
+        save_results(
+            output_dir=args.output,
+            events=result['events'],
+            contradictions=result['contradictions'],
+            summary=result['summary'],
+            case_id=case_id,
+            sms_path=args.input_file,
+        )
+        print(f"Extracted {len(result['events'])} events → {args.output}/")
 
     elif args.command == 'call-log':
         api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')
+        case_id = args.case_id
         events = extract_call_log_events(args.input_file, api_key)
-        os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
-        with open(args.output, 'w', newline='') as f:
+        output_dir = args.output
+        os.makedirs(output_dir, exist_ok=True)
+        call_csv = os.path.join(output_dir, 'call_events.csv')
+        with open(call_csv, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['DATE', 'TIME', 'CALLER', 'RECIPIENT', 'CALL_TYPE', 'DURATION', 'ANSWERED', 'LEGAL_SIGNIFICANCE'])
             for e in events:
                 writer.writerow([e.get('date', ''), e.get('time', ''), e.get('caller', ''),
                                e.get('recipient', ''), e.get('call_type', ''), e.get('duration', ''),
                                e.get('answered', ''), e.get('legal_significance', '')])
-        print(f"Extracted {len(events)} call events to {args.output}")
+        manifest = generate_manifest(
+            case_id=case_id,
+            call_log_path=args.input_file,
+            event_count=len(events),
+        )
+        manifest_path = os.path.join(output_dir, f'{case_id}_manifest.json')
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
+        print(f"Extracted {len(events)} call events → {call_csv}")
 
     elif args.command == 'analyze':
         api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('OPENAI_API_KEY')

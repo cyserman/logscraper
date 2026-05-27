@@ -268,5 +268,123 @@ class TestManifestAndThirdParties(unittest.TestCase):
         self.assertIn('third_parties', sig.parameters)
 
 
+class TestCaseCraftIntegration(unittest.TestCase):
+
+    def _sample_events(self):
+        return [
+            {
+                'date': '2024-03-15', 'time': '10:00', 'actor': 'Plaintiff',
+                'event_type': 'VISIT_DENIED', 'fact': 'Denied visit',
+                'quote': 'he cant come today', 'legal_significance': 'No notice given',
+            },
+            {
+                'date': '2024-03-16', 'time': '14:00', 'actor': 'Defendant',
+                'event_type': 'PICKUP_LATE', 'fact': 'Arrived 45 min late',
+                'quote': '', 'legal_significance': 'Pattern of lateness',
+            },
+        ]
+
+    def test_format_for_casecraft_basic_shape(self):
+        """format_for_casecraft returns required top-level keys."""
+        from timeline_extractor import format_for_casecraft
+        events = self._sample_events()
+        result = format_for_casecraft(
+            events=events,
+            contradictions=[],
+            summary={},
+            manifest={'case_id': 'test-001'},
+            case_id='test-001',
+        )
+        self.assertEqual(result['case_id'], 'test-001')
+        self.assertIsNone(result['firm_id'])
+        self.assertEqual(result['record_count'], 2)
+        self.assertEqual(result['contradiction_count'], 0)
+        self.assertEqual(len(result['evidence_records']), 2)
+        self.assertEqual(result['contradiction_records'], [])
+
+    def test_format_for_casecraft_evidence_record_fields(self):
+        """Each evidence_record has required CaseCraft fields."""
+        from timeline_extractor import format_for_casecraft
+        events = self._sample_events()
+        result = format_for_casecraft(
+            events=events, contradictions=[], summary={},
+            manifest={}, case_id='smith-v-jones',
+        )
+        rec = result['evidence_records'][0]
+        self.assertEqual(rec['caseId'], 'smith-v-jones')
+        self.assertEqual(rec['type'], 'timeline_event')
+        self.assertEqual(rec['deviceId'], 'logscraper')
+        self.assertEqual(rec['eventType'], 'VISIT_DENIED')
+        self.assertFalse(rec['isContradiction'])
+        self.assertIn('capturedAt', rec)
+        self.assertIn('content', rec)
+        # content must be valid JSON
+        import json
+        parsed = json.loads(rec['content'])
+        self.assertEqual(parsed['actor'], 'Plaintiff')
+
+    def test_format_for_casecraft_is_contradiction_flag(self):
+        """Events passed as contradictions get isContradiction=True."""
+        from timeline_extractor import format_for_casecraft
+        events = self._sample_events()
+        contradictions = [events[0]]  # first event is a contradiction
+        result = format_for_casecraft(
+            events=events, contradictions=contradictions,
+            summary={}, manifest={}, case_id='test-002',
+        )
+        self.assertTrue(result['evidence_records'][0]['isContradiction'])
+        self.assertFalse(result['evidence_records'][1]['isContradiction'])
+
+    def test_format_for_casecraft_firm_id_threading(self):
+        """firm_id is included in every record when provided."""
+        from timeline_extractor import format_for_casecraft
+        events = self._sample_events()
+        result = format_for_casecraft(
+            events=events, contradictions=[], summary={}, manifest={},
+            case_id='jones-v-jones', firm_id='firm-abc',
+        )
+        self.assertEqual(result['firm_id'], 'firm-abc')
+        for rec in result['evidence_records']:
+            self.assertEqual(rec['firmId'], 'firm-abc')
+
+    def test_format_for_casecraft_no_firm_id_excluded(self):
+        """firmId key is absent when firm_id is not provided."""
+        from timeline_extractor import format_for_casecraft
+        events = self._sample_events()
+        result = format_for_casecraft(
+            events=events, contradictions=[], summary={}, manifest={},
+            case_id='personal-case',
+        )
+        for rec in result['evidence_records']:
+            self.assertNotIn('firmId', rec)
+
+    def test_normalize_captured_at_iso_date(self):
+        """Date-only string → ISO 8601 with T00:00:00+00:00."""
+        from timeline_extractor import _normalize_captured_at
+        self.assertEqual(
+            _normalize_captured_at('2024-03-15'),
+            '2024-03-15T00:00:00+00:00',
+        )
+
+    def test_normalize_captured_at_iso_datetime(self):
+        """Full ISO datetime passes through unchanged."""
+        from timeline_extractor import _normalize_captured_at
+        dt = '2024-03-15T10:30:00+00:00'
+        self.assertEqual(_normalize_captured_at(dt), dt)
+
+    def test_normalize_captured_at_space_separated(self):
+        """Space-separated datetime → T-separated with +00:00 suffix."""
+        from timeline_extractor import _normalize_captured_at
+        self.assertEqual(
+            _normalize_captured_at('2024-03-15 10:30:00'),
+            '2024-03-15T10:30:00+00:00',
+        )
+
+    def test_normalize_captured_at_empty(self):
+        """Empty string returns empty string."""
+        from timeline_extractor import _normalize_captured_at
+        self.assertEqual(_normalize_captured_at(''), '')
+
+
 if __name__ == '__main__':
     unittest.main()

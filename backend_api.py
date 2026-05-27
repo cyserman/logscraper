@@ -7,13 +7,28 @@ Docs: http://localhost:8000/docs
 
 import os
 import tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from timeline_extractor import extract_timeline, extract_call_log_events, generate_manifest
+from timeline_extractor import (
+    extract_timeline, extract_call_log_events, generate_manifest, format_for_casecraft,
+)
 
 app = FastAPI(title="LogScraper API", version="1.0")
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
+    """Optional Bearer token gate. Only enforced when LOGSCRAPER_API_KEY is set."""
+    required = os.environ.get("LOGSCRAPER_API_KEY")
+    if not required:
+        return  # open in local / personal mode
+    if not credentials or credentials.credentials != required:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,6 +44,15 @@ class SMSRequest(BaseModel):
     base_url: str | None = None
     third_parties: list[str] = []
     case_id: str = "case"
+
+
+class CaseCraftRequest(BaseModel):
+    text: str
+    case_id: str
+    firm_id: str | None = None
+    third_parties: list[str] = []
+    model: str = "gemini-2.0-flash"
+    base_url: str | None = None
 
 
 @app.get("/health")
@@ -102,6 +126,44 @@ async def extract_calls(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+@app.post("/api/extract-for-casecraft", dependencies=[Depends(verify_api_key)])
+def extract_for_casecraft(req: CaseCraftRequest):
+    """Extract SMS timeline and return CaseCraft EvidenceRecord-shaped payload.
+
+    Requires Authorization: Bearer <LOGSCRAPER_API_KEY> when that env var is set.
+    firm_id is optional — pass it for B2B tenants, omit for personal/pro-se use.
+    """
+    api_key = (
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY")
+    )
+    try:
+        result = extract_timeline(
+            req.text, api_key,
+            model=req.model,
+            base_url=req.base_url,
+            third_parties=req.third_parties or None,
+        )
+        manifest = generate_manifest(
+            case_id=req.case_id,
+            model=req.model,
+            event_count=len(result['events']),
+            contradiction_count=len(result['contradictions']),
+        )
+        payload = format_for_casecraft(
+            events=result['events'],
+            contradictions=result['contradictions'],
+            summary=result['summary'],
+            manifest=manifest,
+            case_id=req.case_id,
+            firm_id=req.firm_id or None,
+        )
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
