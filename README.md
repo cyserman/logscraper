@@ -282,7 +282,24 @@ scp export.txt calls.csv root@<vps>:/root/logscraper/incoming/       # queue a b
 scp -r root@<vps>:/root/logscraper/processed_evidence/<run> .        # pull results back
 ```
 
-The UI binds to `127.0.0.1` by default. These routes have no auth, so never bind it to a public interface. Set `LOGSCRAPER_HOST` to your Tailscale IP if you'd rather skip the tunnel.
+The UI binds to `127.0.0.1` by default. These routes have no auth, so never bind it to a public interface.
+
+### Tailscale instead of the tunnel
+
+Leave the service on `127.0.0.1` and let Tailscale proxy it with HTTPS to your tailnet only:
+
+```bash
+# on the VPS (once): MagicDNS + HTTPS certificates must be enabled in the Tailscale admin console
+tailscale serve --bg 8000        # -> https://<vps-name>.<tailnet>.ts.net
+tailscale serve status
+tailscale serve --https=443 off  # undo
+```
+
+Open that URL from any device logged into your tailnet; no `ssh -L` needed, and file drops can use `scp root@<vps-name>:` over the tailnet too. Once it works, close public port 8000 (it should never have been open) and consider restricting public SSH.
+
+- Never use `tailscale funnel` here: that publishes the page to the whole internet.
+- With the default "allow all" tailnet policy no ACL change is needed. If you've written a stricter policy, grant only your own user access to the VPS on port 443. Don't tag the VPS just for this: a tag changes the node's identity, and other tailnet traffic to it (Ollama, SSH) would then need its own grants.
+- GitHub Actions does **not** join the tailnet for this repo. Tests need no network, and a CI runner with tailnet access to the box holding case evidence is risk with no payoff. Deploy with `git pull && systemctl restart logscraper-mobile claw-worker` on the VPS.
 
 ### Local-model pitfalls
 
