@@ -48,3 +48,7 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+
+# evidence — never commit case files or extraction output
+/incoming/
+/processed_evidence/

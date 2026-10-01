@@ -73,21 +73,33 @@ AGGREGATION_PROMPT = """Using the extracted CSV data, generate the following cou
 Output as separate tables, one per category, in CSV format with clear headers."""
 
 
+def _table_rows(output: str) -> list[list[str]]:
+    """Split pipe-delimited LLM output into rows of fields, skipping everything before the DATE header.
+
+    Small local models often add a preamble, wrap the table in ``` fences or emit a markdown
+    table (| a | b |, |---|). Without this tolerance those replies parse to zero events, silently.
+    """
+    lines = output.strip().split('\n')
+    start = next((i for i, line in enumerate(lines) if line.strip().lstrip('|').strip().startswith('DATE')), None)
+    if start is None:
+        return []
+    markdown = lines[start].strip().startswith('|')
+
+    rows = []
+    for line in lines[start + 1:]:
+        line = line.strip()
+        if not line or line.startswith('```') or not line.strip('|-: '):
+            continue
+        if markdown:
+            line = line.removeprefix('|').removesuffix('|')
+        rows.append(line.split('|'))
+    return rows
+
+
 def parse_csv_output(output: str) -> list[dict]:
     """Parse CSV-formatted LLM output into list of event dicts."""
-    lines = output.strip().split('\n')
-    if not lines:
-        return []
-
-    header = lines[0]
-    if not header.startswith('DATE'):
-        return []
-
     events = []
-    for line in lines[1:]:
-        if not line.strip():
-            continue
-        parts = line.split('|')
+    for parts in _table_rows(output):
         if len(parts) >= 6:
             event = {
                 'date': parts[0].strip(),
@@ -101,6 +113,11 @@ def parse_csv_output(output: str) -> list[dict]:
             events.append(event)
 
     return events
+
+
+def _llm_timeout() -> float:
+    """Seconds to wait for an LLM response. CPU-only local models need far more than cloud APIs."""
+    return float(os.environ.get('LOGSCRAPER_LLM_TIMEOUT', '120'))
 
 
 def call_llm(prompt: str, content: str, api_key: Optional[str] = None,
@@ -117,9 +134,12 @@ def call_llm(prompt: str, content: str, api_key: Optional[str] = None,
 
     base_url overrides the default endpoint for OpenAI-compatible providers.
     """
-    # Explicit base_url → OpenAI-compatible provider (OpenRouter, Ollama, etc.)
+    # Explicit base_url → OpenAI-compatible provider (OpenRouter, Ollama, vLLM, etc.)
     if base_url:
         resolved_key = api_key or os.environ.get('OPENROUTER_API_KEY') or 'ollama'
+        # "ollama/" is a routing prefix, not part of the model name the server knows
+        if model.startswith('ollama/'):
+            model = model[len('ollama/'):]
         return call_openai(prompt, content, resolved_key, model, base_url=base_url)
 
     # OpenRouter shorthand: model name prefixed with "openrouter/"
@@ -179,7 +199,7 @@ def call_gemini(system_prompt: str, user_content: str, api_key: str, model: str)
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
+        with urllib.request.urlopen(req, timeout=_llm_timeout()) as response:
             result = json.loads(response.read().decode('utf-8'))
             return result['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
@@ -209,7 +229,7 @@ def call_openai(system_prompt: str, user_content: str, api_key: str, model: str,
     })
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
+        with urllib.request.urlopen(req, timeout=_llm_timeout()) as response:
             result = json.loads(response.read().decode('utf-8'))
             return result['choices'][0]['message']['content']
     except Exception as e:
@@ -238,19 +258,8 @@ def extract_call_log(call_log_text: str, api_key: str = None, model: str = "gemi
 
 def parse_call_csv_output(output: str) -> list[dict]:
     """Parse CSV-formatted LLM call log output into list of event dicts."""
-    lines = output.strip().split('\n')
-    if not lines:
-        return []
-
-    header = lines[0]
-    if not header.startswith('DATE'):
-        return []
-
     events = []
-    for line in lines[1:]:
-        if not line.strip():
-            continue
-        parts = line.split('|')
+    for parts in _table_rows(output):
         if len(parts) >= 6:
             event = {
                 'date': parts[0].strip(),
