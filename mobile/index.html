@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121212">
+  <title>LogScraper Mobile</title>
+  <style>
+    :root { --bg:#121212; --panel:#1b1b1b; --line:#2c2c2c; --text:#e0e0e0; --muted:#9a9a9a;
+            --accent:#10b981; --warn:#f59e0b; --bad:#f87171; }
+    * { box-sizing: border-box; }
+    body { margin:0; padding:12px 16px 96px; background:var(--bg); color:var(--text);
+           font:15px/1.45 system-ui, -apple-system, sans-serif; }
+    header { display:flex; justify-content:space-between; align-items:center;
+             padding:6px 0 10px; border-bottom:1px solid var(--line); margin-bottom:14px; }
+    h1 { font-size:18px; margin:0; color:var(--accent); }
+    .pill { font-size:12px; color:var(--muted); background:var(--panel); padding:3px 8px; border-radius:6px; }
+    .tabs { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
+    button { min-height:48px; border:0; border-radius:8px; font:600 15px system-ui, sans-serif;
+             cursor:pointer; color:var(--text); background:var(--panel); width:100%; }
+    button.on { background:var(--accent); color:#04130d; }
+    button.go { background:var(--accent); color:#04130d; margin:10px 0 14px; }
+    button:disabled { opacity:.5; }
+    textarea, input[type=text] { width:100%; background:var(--panel); color:var(--text);
+             border:1px solid var(--line); border-radius:8px; padding:10px; font:13px/1.4 ui-monospace, monospace; }
+    textarea:focus, input:focus { outline:none; border-color:var(--accent); }
+    input[type=file] { width:100%; color:var(--muted); padding:12px 0; }
+    details { margin-bottom:14px; color:var(--muted); font-size:13px; }
+    details input { margin-top:6px; }
+    .hidden { display:none; }
+    #status { text-align:center; color:var(--muted); padding:14px 0; font-size:14px; }
+    #status.err { color:var(--bad); }
+    .empty { text-align:center; color:var(--muted); padding:14px 0; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+            padding:10px 12px; margin-bottom:10px; font-size:13px; }
+    .card.flag { border-color:var(--bad); }
+    .row { display:flex; justify-content:space-between; gap:8px; font-weight:700; }
+    .type { color:var(--accent); text-align:right; }
+    .who { color:var(--muted); font-weight:600; margin:2px 0; }
+    blockquote { margin:6px 0; padding-left:8px; border-left:2px solid var(--accent); color:var(--muted); font-style:italic; }
+    .sig { color:var(--warn); padding-top:4px; }
+    .bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; color:var(--muted); }
+    .bar button { width:auto; min-height:36px; padding:0 14px; font-size:13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚖️ LogScraper</h1>
+    <span class="pill" id="modelPill"></span>
+  </header>
+
+  <div class="tabs">
+    <button id="tabSms" class="on" onclick="switchTab('sms')">SMS Export</button>
+    <button id="tabCalls" onclick="switchTab('calls')">Call Log</button>
+  </div>
+
+  <details>
+    <summary>Model</summary>
+    <input type="text" id="model" value="__DEFAULT_MODEL__" autocapitalize="off" autocorrect="off" spellcheck="false">
+  </details>
+
+  <section id="smsSection">
+    <textarea id="smsInput" rows="8" placeholder="Paste SMS transcript here..."></textarea>
+    <button class="go" onclick="submitSms()">Run Timeline Extraction</button>
+  </section>
+
+  <section id="callsSection" class="hidden">
+    <input type="file" id="callFile" accept=".csv,.json,.xlsx,.xls,.pdf,.html,.txt">
+    <button class="go" onclick="submitCalls()">Parse Call Log</button>
+  </section>
+
+  <div id="status" class="hidden"></div>
+  <div id="bar" class="bar hidden">
+    <span id="counts"></span>
+    <button onclick="saveJson()">Save JSON</button>
+  </div>
+  <div id="results"></div>
+
+  <script>
+    // Mirrors timeline_extractor._CONTRADICTION_KEYWORDS
+    const FLAG = /CONTRADICT|PRIOR STATEMENT|INCONSISTENT|FALSUS/i;
+    let lastResult = null;
+
+    const $ = id => document.getElementById(id);
+    const model = () => $('model').value.trim();
+    // Every value rendered below comes from SMS text or LLM output — never trust it as HTML
+    const esc = v => String(v ?? '').replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    $('modelPill').textContent = model();
+    $('model').addEventListener('input', () => { $('modelPill').textContent = model(); });
+
+    function switchTab(type) {
+      const sms = type === 'sms';
+      $('smsSection').classList.toggle('hidden', !sms);
+      $('callsSection').classList.toggle('hidden', sms);
+      $('tabSms').classList.toggle('on', sms);
+      $('tabCalls').classList.toggle('on', !sms);
+    }
+
+    function setStatus(msg, isErr = false) {
+      $('status').textContent = msg || '';
+      $('status').className = msg ? (isErr ? 'err' : '') : 'hidden';
+    }
+
+    async function run(request, isCall) {
+      document.querySelectorAll('button.go').forEach(b => b.disabled = true);
+      $('results').innerHTML = '';
+      $('bar').classList.add('hidden');
+      setStatus('Extracting with ' + model() + '… local models can take several minutes. Keep this tab open.');
+      try {
+        const res = await request();
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+        lastResult = data;
+        setStatus('');
+        render(data, isCall);
+      } catch (err) {
+        setStatus('Failed: ' + err.message, true);
+      } finally {
+        document.querySelectorAll('button.go').forEach(b => b.disabled = false);
+      }
+    }
+
+    function submitSms() {
+      const text = $('smsInput').value;
+      if (!text.trim()) return;
+      run(() => fetch('/api/extract-sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, model: model() }),
+      }), false);
+    }
+
+    function submitCalls() {
+      const file = $('callFile').files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('model', model());
+      run(() => fetch('/api/extract-calls', { method: 'POST', body: fd }), true);
+    }
+
+    function render(data, isCall) {
+      const items = data.events || [];
+      const flagged = (data.contradictions || []).length;
+      $('counts').textContent = items.length + (isCall ? ' calls' : ' events') +
+        (isCall ? '' : ' · ' + flagged + ' flagged');
+      $('bar').classList.remove('hidden');
+      if (!items.length) {
+        $('results').innerHTML = '<div class="empty">No events found.</div>';
+        return;
+      }
+      $('results').innerHTML = items.map(i => isCall ? callCard(i) : smsCard(i)).join('');
+    }
+
+    function smsCard(i) {
+      const flag = FLAG.test((i.legal_significance || '') + ' ' + (i.fact || ''));
+      return `<div class="card${flag ? ' flag' : ''}">
+        <div class="row"><span>${esc(i.date)} ${esc(i.time)}</span><span class="type">${esc(i.event_type)}</span></div>
+        <div class="who">${esc(i.actor)}</div>
+        <div>${esc(i.fact)}</div>
+        ${i.quote ? `<blockquote>"${esc(i.quote)}"</blockquote>` : ''}
+        ${i.legal_significance ? `<div class="sig">⚠️ ${esc(i.legal_significance)}</div>` : ''}
+      </div>`;
+    }
+
+    function callCard(i) {
+      return `<div class="card">
+        <div class="row"><span>${esc(i.date)} ${esc(i.time)}</span><span class="type">${esc(i.call_type)}</span></div>
+        <div class="who">${esc(i.caller || '?')} ➔ ${esc(i.recipient || '?')}</div>
+        <div>Duration: ${esc(i.duration || '0s')}${i.answered ? ' · Answered: ' + esc(i.answered) : ''}</div>
+        ${i.legal_significance ? `<div class="sig">⚠️ ${esc(i.legal_significance)}</div>` : ''}
+      </div>`;
+    }
+
+    // Results only live in this tab — save them (manifest included) before navigating away
+    function saveJson() {
+      if (!lastResult) return;
+      const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'logscraper_' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+  </script>
+</body>
+</html>

@@ -244,10 +244,77 @@ Returns `{ status: "ok", api_key_configured: true }`
 
 ---
 
+## Phone + VPS (local Hermes model)
+
+Two entry points run the same engine against a local model, with no Node.js and no API key:
+
+| | What it does | Best for |
+|---|---|---|
+| `mobile_backend.py` | Touch UI at `/` on top of the REST API above; results can be saved as JSON | Quick pastes / single call logs from a phone |
+| `claw_worker.py` | Watches `incoming/`; every file that finishes uploading is moved into `processed_evidence/<case>_<UTC>/inputs/`, extracted, cross-referenced, and written out with a manifest hashing every input | Large exports and batches. It survives the phone sleeping. |
+
+The worker processes **all** files in a drop. It merges SMS exports (`.txt`/`.md`) into one timeline and cross-references them against every call log (`.csv`/`.xlsx`/`.xls`/`.json`). It never processes a file twice, skips files modified in the last 15s (still uploading), and holds a lock so overlapping runs can't happen. On failure it writes `FAILED.txt` next to the kept inputs, together with the `mv` command to retry.
+
+### VPS setup (once)
+
+```bash
+# Ollama's installer already runs it as a systemd service — don't start `ollama serve` by hand
+ollama pull hermes3:latest
+sudo systemctl edit ollama          # add:  [Service]
+                                    #       Environment="OLLAMA_CONTEXT_LENGTH=16384"
+sudo systemctl restart ollama
+
+git clone https://github.com/cyserman/logscraper /root/logscraper && cd /root/logscraper
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp deploy/logscraper.env.example .env                    # model, endpoint, case id
+sudo cp deploy/*.service /etc/systemd/system/ && sudo systemctl daemon-reload
+sudo systemctl enable --now logscraper-mobile claw-worker
+journalctl -u claw-worker -f
+```
+
+Without systemd: `python claw_worker.py my_case` (one pass, cron-friendly) or `python claw_worker.py my_case --watch`.
+
+### From the phone (Termux)
+
+```bash
+ssh -N -o ServerAliveInterval=30 -L 8000:localhost:8000 root@<vps>   # then open http://localhost:8000
+scp export.txt calls.csv root@<vps>:/root/logscraper/incoming/       # queue a batch for the worker
+scp -r root@<vps>:/root/logscraper/processed_evidence/<run> .        # pull results back
+```
+
+The UI binds to `127.0.0.1` by default. These routes have no auth, so never bind it to a public interface.
+
+### Tailscale instead of the tunnel
+
+Leave the service on `127.0.0.1` and let Tailscale proxy it with HTTPS to your tailnet only:
+
+```bash
+# on the VPS (once): MagicDNS + HTTPS certificates must be enabled in the Tailscale admin console
+tailscale serve --bg 8000        # -> https://<vps-name>.<tailnet>.ts.net
+tailscale serve status
+tailscale serve --https=443 off  # undo
+```
+
+Open that URL from any device logged into your tailnet; no `ssh -L` needed, and file drops can use `scp root@<vps-name>:` over the tailnet too. Once it works, close public port 8000 (it should never have been open) and consider restricting public SSH.
+
+- Never use `tailscale funnel` here: that publishes the page to the whole internet.
+- With the default "allow all" tailnet policy no ACL change is needed. If you've written a stricter policy, grant only your own user access to the VPS on port 443. Don't tag the VPS just for this: a tag changes the node's identity, and other tailnet traffic to it (Ollama, SSH) would then need its own grants.
+- GitHub Actions does **not** join the tailnet for this repo. Tests need no network, and a CI runner with tailnet access to the box holding case evidence is risk with no payoff. Deploy with `git pull && systemctl restart logscraper-mobile claw-worker` on the VPS.
+
+### Local-model pitfalls
+
+- **Silent truncation:** Ollama drops whatever doesn't fit its context window, with no error, so events go missing. Keep `LOGSCRAPER_CHUNK_TOKENS` well under `OLLAMA_CONTEXT_LENGTH` (6000 for 16384 leaves room for the prompt and output).
+- **Speed:** on a CPU-only VPS, expect minutes per chunk. Set `LOGSCRAPER_LLM_TIMEOUT` high (1800), and send big exports through the worker rather than the phone UI. A browser request that runs that long usually dies when the phone sleeps. Pointing `OLLAMA_BASE_URL` at a GPU/high-RAM machine on your tailnet is the biggest speedup.
+- **RAM:** hermes3 8B plus a 16k context window needs about 7 GB. On a 12 GB box shared with other models, keep only one loaded at a time.
+- **Summary tables** are produced in one call over all events, so on very large cases a local model may truncate them too. `events.csv` is the source of truth.
+- `HERMES_MODEL` keeps the `ollama/` prefix (e.g. `ollama/hermes3:latest`). The worker also accepts bare names and vLLM model ids, since it always sends to `OLLAMA_BASE_URL`.
+
+---
+
 ## Development
 
 ```bash
-python test_parsing.py -v    # 14 unit tests, no API key needed
+python -m pytest -q          # unit tests, no API key or model needed
 bun typecheck
 bun lint
 ```

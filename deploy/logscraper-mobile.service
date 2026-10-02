@@ -1,0 +1,16 @@
+# Phone UI + API.  Install: see README "Phone + VPS".  Adjust /root/logscraper if cloned elsewhere.
+[Unit]
+Description=LogScraper mobile UI + API
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/logscraper
+EnvironmentFile=-/root/logscraper/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/logscraper/.venv/bin/python mobile_backend.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

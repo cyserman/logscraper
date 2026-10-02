@@ -26,6 +26,21 @@ __all__ = [
 ]
 
 
+def _file_meta(path: str) -> dict | None:
+    """SHA-256 + size record for one input file (None if missing)."""
+    if not path or not os.path.exists(path):
+        return None
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return {
+        'path': os.path.abspath(path),
+        'sha256': h.hexdigest(),
+        'size_bytes': os.path.getsize(path),
+    }
+
+
 def generate_manifest(
     case_id: str,
     sms_path: str = None,
@@ -33,34 +48,28 @@ def generate_manifest(
     model: str = None,
     event_count: int = 0,
     contradiction_count: int = 0,
+    input_files: list[str] = None,
 ) -> dict:
-    """Generate a chain of custody record for the extraction run."""
-    def file_meta(path):
-        if not path or not os.path.exists(path):
-            return None
-        h = hashlib.sha256()
-        with open(path, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192), b''):
-                h.update(chunk)
-        return {
-            'path': os.path.abspath(path),
-            'sha256': h.hexdigest(),
-            'size_bytes': os.path.getsize(path),
-        }
+    """Generate a chain of custody record for the extraction run.
 
-    return {
+    input_files hashes every input of a multi-file batch (e.g. claw_worker drops).
+    """
+    manifest = {
         'case_id': case_id,
         'processed_at': datetime.now(timezone.utc).isoformat(),
         'extractor_version': EXTRACTOR_VERSION,
         'model': model or 'unknown',
         'platform': platform.platform(),
         'inputs': {
-            'sms_file': file_meta(sms_path),
-            'call_log': file_meta(call_log_path),
+            'sms_file': _file_meta(sms_path),
+            'call_log': _file_meta(call_log_path),
         },
         'event_count': event_count,
         'contradiction_count': contradiction_count,
     }
+    if input_files:
+        manifest['inputs']['all_files'] = [_file_meta(p) for p in input_files]
+    return manifest
 
 
 def save_results(
@@ -73,6 +82,7 @@ def save_results(
     sms_path: str = None,
     call_log_path: str = None,
     model: str = None,
+    input_files: list[str] = None,
 ) -> dict:
     """Write all output CSVs and a chain of custody manifest. Returns the manifest dict."""
     os.makedirs(output_dir, exist_ok=True)
@@ -106,6 +116,7 @@ def save_results(
         model=model,
         event_count=len(events),
         contradiction_count=len(contradictions),
+        input_files=input_files,
     )
     manifest_path = os.path.join(output_dir, f'{case_id}_manifest.json')
     with open(manifest_path, 'w') as f:
@@ -153,8 +164,14 @@ def extract_timeline(raw_text: str, api_key: str = None,
     }
 
 
-def chunk_text(text: str, max_tokens: int = 150000) -> Iterator[str]:
-    """Split text into chunks that fit within token limits."""
+def chunk_text(text: str, max_tokens: int = None) -> Iterator[str]:
+    """Split text into chunks that fit within token limits.
+
+    Default (150k) suits cloud models. Local models (Ollama) silently truncate input past
+    their context window, so set LOGSCRAPER_CHUNK_TOKENS well below num_ctx for those.
+    """
+    if max_tokens is None:
+        max_tokens = int(os.environ.get('LOGSCRAPER_CHUNK_TOKENS', '150000'))
     lines = text.split('\n')
     current_chunk = []
     current_size = 0

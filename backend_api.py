@@ -10,6 +10,7 @@ import tempfile
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from timeline_extractor import (
@@ -113,7 +114,10 @@ async def extract_calls(
             tmp.write(await file.read())
             tmp_path = tmp.name
 
-        events = extract_call_log_events(tmp_path, api_key, model=model, base_url=base_url)
+        # Blocking LLM call — keep it off the event loop so the server stays responsive
+        events = await run_in_threadpool(
+            extract_call_log_events, tmp_path, api_key, model=model, base_url=base_url,
+        )
         manifest = generate_manifest(
             case_id='call_log',
             call_log_path=tmp_path,
@@ -168,4 +172,4 @@ def extract_for_casecraft(req: CaseCraftRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend_api:app", host="0.0.0.0", port=8000, reload=True)  # reload needs an import string

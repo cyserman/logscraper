@@ -22,6 +22,10 @@
 - [x] analysis.py: contradiction finding, testable hypothesis generation
 - [x] Interactive refinement: asks for additional docs to fill gaps
 - [x] Case state persists and grows as new documents are added
+- [x] claw_worker.py: unattended incoming/ → processed_evidence/ batch worker (local model, lock, settle, per-batch manifest)
+- [x] mobile_backend.py + mobile/index.html: phone UI served on top of backend_api (no Node.js)
+- [x] Local-model hardening: ollama/ prefix + base_url routing, LOGSCRAPER_CHUNK_TOKENS, LOGSCRAPER_LLM_TIMEOUT, tolerant table parsing
+- [x] deploy/: systemd units + env template for the VPS
 
 ## Project Architecture
 
