@@ -1,10 +1,10 @@
-# Active Context: Timeline Intelligence Engine
+# Active Context: LogScraper
 
 ## Current State
 
-**Module Status**: ✅ Created - timeline_extractor module ready
-**Purpose**: Forensic SMS extraction for co-parent litigation cases
-**CaseCraft Alignment**: Targeting mobile app and enterprise products
+**Module Status**: SMS and call-log extraction are integrated with the Next.js frontend; RFA/RFP evidence matrix is available in the browser.
+**Purpose**: Extract communication timelines and organize reviewed evidence for discovery requests without generating legal responses.
+**Data handling**: Matrix persistence is explicit opt-in, browser-local, and exportable; source files are not changed.
 
 ## Recently Completed
 
@@ -26,6 +26,8 @@
 - [x] mobile_backend.py + mobile/index.html: phone UI served on top of backend_api (no Node.js)
 - [x] Local-model hardening: ollama/ prefix + base_url routing, LOGSCRAPER_CHUNK_TOKENS, LOGSCRAPER_LLM_TIMEOUT, tolerant table parsing
 - [x] deploy/: systemd units + env template for the VPS
+- [x] Next.js RFA/RFP evidence matrix: per-request event linking, counts, source quotes/provenance, review notes, CSV/JSON export, and opt-in browser-local save/load
+- [x] WHITEPAPER.md quick-start: documented the Ubuntu/Debian python3-venv prerequisite
 
 ## Project Architecture
 
@@ -41,9 +43,12 @@ timeline_extractor/
 2. **Two-pass approach**: Pass 1 = raw event extraction; Pass 2 = aggregation into counts/date lists
 3. **Contradiction flagging**: Automatic Falsus in Uno ammunition from Plaintiff's self-contradictions
 4. **No chain of custody yet**: Discovery tool version vs private analysis tool still TBD
+5. **Evidence matrix**: Request wording and reviewed links are user-entered; extracted interpretations remain separate from source facts; unavailable provenance is disclosed instead of inferred.
 
 ## Session History
 
 | Date | Changes |
 |------|---------|
 | 2026-05-22 | Timeline extraction module created for CaseCraft prototype |
+| 2026-10-26 | Added interactive RFA/RFP evidence matrix to the Next.js frontend |
+| 2026-10-27 | Documented the Python venv package prerequisite in the whitepaper quick-start |

@@ -92,13 +92,15 @@ Deploy the Python extraction engine as a separate microservice (Docker, AWS Lamb
 5. Frontend displays results in tables, charts, or timelines
 6. User can export results (CSV, PDF) for legal proceedings
 
-## UI Components to Build
+## Existing UI Components
 - File upload component (SMS, call logs, PDFs, etc.)
-- Timeline visualization (using libraries like vis.js, react-calendar, or custom)
-- Event table with filtering and search
-- Summary dashboard with charts
-- Export buttons (CSV, PDF, JSON)
-- Case management (save/load analyses)
+- SMS timeline extraction and event table
+- Call-log extraction and event table
+- CSV export for extracted events
+- RFA / RFP evidence matrix: enter request wording, link extracted occurrences, review source provenance, and export CSV or JSON
+- Opt-in browser-local matrix save/load (no backend persistence)
+
+The evidence matrix does not generate discovery responses. Extracted events are not the original record; confirm quotes, dates, times, and provenance against the untouched source. SMS quote lines are identified only for unique exact matches. Call extraction currently does not return original row numbers.
 
 ## Environment Variables
 Add to `.env.local`:
