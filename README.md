@@ -13,6 +13,7 @@ A full-stack forensic evidence tool for parsing SMS exports and call logs into s
 │                     │        │                       │
 │  • SMS paste tab    │        │  /api/extract-sms     │
 │  • Call log upload  │        │  /api/extract-calls   │
+│  • RFA/RFP matrix   │        │                       │
 │  • Model selector   │        │  /health              │
 │  • CSV export       │        └──────────┬────────────┘
 └─────────────────────┘                   │
@@ -59,6 +60,12 @@ bun dev                       # runs on :3000
 ```
 
 Open `http://localhost:3000`.
+
+## RFA / RFP evidence matrix
+
+The **RFA / RFP Matrix** tab lets you enter your own request wording, label and number each request, and link it to relevant extracted SMS or call-log events. Each linked occurrence shows extracted date/time when available, counts of linked records and distinct dates, the quote returned by SMS extraction, event details, and source provenance. SMS source lines are shown only when the extracted quote has one unambiguous exact match in the pasted text. Call-log extraction currently returns no original row location, so the matrix labels those entries by extracted event number and says that the source row was not returned.
+
+Review each occurrence against the untouched original before relying on it; use the explicit review checkbox and optional note to record that review. The feature does not draft discovery responses or make legal conclusions. Missing details remain blank or explicitly unavailable, and extractor interpretations are labeled separately from source facts. Use **Export CSV** for a spreadsheet-friendly matrix or **Export JSON** to preserve the structured data for later import. Saving in the browser is opt-in and local to that browser/device; nothing is sent to the backend by the matrix.
 
 ---
 

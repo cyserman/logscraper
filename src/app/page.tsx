@@ -1,6 +1,14 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
+import EvidenceMatrix from '@/components/evidence-matrix'
+import {
+  createCallEvidence,
+  createSmsEvidence,
+  type CallEvent,
+  type EvidenceItem,
+  type SmsEvent,
+} from '@/lib/evidence-matrix'
 
 const MODELS = [
   { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
@@ -10,28 +18,7 @@ const MODELS = [
   { label: 'GPT-4o', value: 'gpt-4o' },
 ]
 
-type Event = {
-  date: string
-  time: string
-  actor: string
-  event_type: string
-  fact: string
-  quote: string
-  legal_significance: string
-}
-
-type CallEvent = {
-  date: string
-  time: string
-  caller: string
-  recipient: string
-  call_type: string
-  duration: string
-  answered: string
-  legal_significance: string
-}
-
-type Tab = 'sms' | 'calls'
+type Tab = 'sms' | 'calls' | 'matrix'
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>('sms')
@@ -40,8 +27,9 @@ export default function Home() {
   const [callFile, setCallFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [events, setEvents] = useState<Event[]>([])
+  const [events, setEvents] = useState<SmsEvent[]>([])
   const [callEvents, setCallEvents] = useState<CallEvent[]>([])
+  const [evidenceItems, setEvidenceItems] = useState<EvidenceItem[]>([])
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -65,7 +53,13 @@ export default function Home() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Extraction failed')
+      const extracted = createSmsEvidence(data.events ?? [], smsText)
       setEvents(data.events ?? [])
+      setEvidenceItems(current => {
+        const byId = new Map(current.map(item => [item.id, item]))
+        for (const item of extracted) byId.set(item.id, item)
+        return [...byId.values()]
+      })
     } catch (e) {
       setError(String(e))
     } finally {
@@ -85,7 +79,14 @@ export default function Home() {
       const res = await fetch('/api/extract-calls', { method: 'POST', body: form })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Extraction failed')
+      const sourceId = `${callFile.name}:${callFile.size}:${callFile.lastModified}`
+      const extracted = createCallEvidence(data.events ?? [], callFile.name, sourceId)
       setCallEvents(data.events ?? [])
+      setEvidenceItems(current => {
+        const byId = new Map(current.map(item => [item.id, item]))
+        for (const item of extracted) byId.set(item.id, item)
+        return [...byId.values()]
+      })
     } catch (e) {
       setError(String(e))
     } finally {
@@ -131,7 +132,7 @@ export default function Home() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 border-b border-neutral-700">
-        {(['sms', 'calls'] as Tab[]).map(t => (
+        {(['sms', 'calls', 'matrix'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -139,7 +140,7 @@ export default function Home() {
               tab === t ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'
             }`}
           >
-            {t === 'sms' ? 'SMS Timeline' : 'Call Log'}
+            {t === 'sms' ? 'SMS Timeline' : t === 'calls' ? 'Call Log' : 'RFA / RFP Matrix'}
           </button>
         ))}
       </div>
@@ -298,6 +299,9 @@ export default function Home() {
           )}
         </div>
       )}
+      <div className={tab === 'matrix' ? '' : 'hidden'}>
+        <EvidenceMatrix extractedEvidence={evidenceItems} />
+      </div>
     </main>
   )
 }
